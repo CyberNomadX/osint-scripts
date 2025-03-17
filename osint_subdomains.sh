@@ -1,17 +1,33 @@
+
+#Define color variables
+GREEN="\e[32m"
+YELLOW="\e[33m"
+RED="\e[31m"
+RESET="\e[0m"
+
 #Set domain from arguement.
 domain=$1
 
 #TODO: Add checks for tools required
 #Check if subfinder is installed
 if command -v subfinder >&2; then
-    echo "✅ Subfinder is installed"
+    echo "${GREEN} ✅ Subfinder is installed"
 else
-    echo "❌ Subfinder is not installed"
+    echo "${RED}❌ Subfinder is not installed"
     echo "Please install subfinder and try again"
     read -p "Press [Enter] to exit the process"
     exit 1
 fi
 
+#Check if amass is installed
+if command -v amass >&2; then
+    echo "${GREEN} ✅ Amass is installed"
+else
+    echo "${RED}❌ Amass is not installed"
+    echo "Please install amass and try again"
+    read -p "Press [Enter] to exit the process"
+    exit 1
+fi
 
 if [ -z "$domain" ]; then
     echo "[*] Usage: $0 <domain>"
