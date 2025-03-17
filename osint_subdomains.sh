@@ -8,7 +8,6 @@ NC=$(tput sgr0)
 #Set domain from arguement.
 domain=$1
 
-#TODO: Add checks for tools required
 #Check if subfinder is installed
 if command -v subfinder >&2; then
     echo "${GREEN} ✅ Subfinder is installed.${NC}"
@@ -48,4 +47,4 @@ echo "[*] Merging, organizing and sorting results"
 echo "[*] Removing duplicates"
 cat subfinder_results.txt amass_results.txt | sort -u > $OutputFile
 
-echo "${GREEN}[*] Enumeration complete. Results saved to $OutputFile ${NC}"
+echo "${GREEN}[*] Enumeration complete.${NC} Results saved to $OutputFile"
