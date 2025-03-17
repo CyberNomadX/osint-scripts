@@ -29,7 +29,7 @@ else
 fi
 
 if [ -z "$domain" ]; then
-    echo "[*] Usage: $0 <domain>"
+    echo "⚠️Usage: $0 <domain>"
     exit 1
 fi
 
