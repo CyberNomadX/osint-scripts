@@ -10,9 +10,9 @@ domain=$1
 
 #Check if subfinder is installed
 if command -v subfinder >&2; then
-    echo "${GREEN} ✅ Subfinder is installed.${NC}"
+    echo "${GREEN} ✅Subfinder is installed.${NC}"
 else
-    echo "${RED}❌ Subfinder is not installed.${NC}"
+    echo "${RED}❌Subfinder is not installed.${NC}"
     echo "${YELLOW}Please install subfinder and try again.${NC}"
     read -p "${YELLOW}Press [Enter] to exit the process.${NC}"
     exit 1
@@ -20,9 +20,9 @@ fi
 
 #Check if amass is installed
 if command -v amass >&2; then
-    echo "${GREEN} ✅ Amass is installed${NC}"
+    echo "${GREEN} ✅Amass is installed${NC}"
 else
-    echo "${RED}❌ Amass is not installed.${NC}"
+    echo "${RED}❌Amass is not installed.${NC}"
     echo "${YELLOW}Please install amass and try again.${NC}"
     read -p "${YELLOW}Press [Enter] to exit the process.${NC}"
     exit 1
@@ -40,7 +40,7 @@ echo "--->Running Subfinder on $domain"
 subfinder -d $domain -o subfinder_results.txt
 
 echo "--->Running Amass on $domain (passive mode)"
-echo "--->⏳ Patience...(this may take a while)"
+echo "--->⏳Patience...(this may take a while)"
 amass enum -passive -d $domain -o amass_results.txt
 
 echo "--->Merging, organizing and sorting results..."
