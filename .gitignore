@@ -1,0 +1,26 @@
+# Ignore common system files
+.DS_Store
+Thumbs.db
+
+# Ignore Python & Bash temporary files
+*.pyc
+*.pyo
+__pycache__/
+*.log
+*.tmp
+*.bak
+
+# Ignore tool-generated output files
+subfinder_results.txt
+amass_results.txt
+*.json
+*.xml
+*.csv
+*.nmap
+*.out
+
+# Ignore any API keys or sensitive configs
+config.json
+.env
+*.key
+*.pem
