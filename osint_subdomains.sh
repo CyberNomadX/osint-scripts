@@ -22,9 +22,9 @@ fi
 if command -v amass >&2; then
     echo "${GREEN} ✅ Amass is installed${NC}"
 else
-    echo "${RED}❌ Amass is not installed${NC}"
-    echo "${YELLOW}Please install amass and try again"
-    read -p "${YELLOW}Press [Enter] to exit the process"
+    echo "${RED}❌ Amass is not installed.${NC}"
+    echo "${YELLOW}Please install amass and try again.${NC}"
+    read -p "${YELLOW}Press [Enter] to exit the process.${NC}"
     exit 1
 fi
 
@@ -36,15 +36,15 @@ fi
 #Output file for results
 OutputFile="subdomains_$domain.txt"
 
-echo "[*] Running Subfinder on $domain"
+echo "---> Running Subfinder on $domain"
 subfinder -d $domain -o subfinder_results.txt
 
-echo "[*] Running Amass on $domain (passive mode)"
-echo "⏳ Patience...(this may take a while)"
+echo "---> Running Amass on $domain (passive mode)"
+echo "--->⏳ Patience...(this may take a while)"
 amass enum -passive -d $domain -o amass_results.txt
 
-echo "[*] Merging, organizing and sorting results"
-echo "[*] Removing duplicates"
+echo "---> Merging, organizing and sorting results..."
+echo "---> Removing duplicates..."
 cat subfinder_results.txt amass_results.txt | sort -u > $OutputFile
 
-echo "${GREEN}[*] Enumeration complete.${NC} Results saved to $OutputFile"
+echo "${GREEN}* Enumeration complete.${NC} Results saved to $OutputFile"
