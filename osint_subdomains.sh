@@ -1,6 +1,9 @@
 #Set domain from arguement.
 domain=$1
 
+#TODO: Add checks for tools required
+
+
 if [ -z "$domain" ]; then
     echo "[*] Usage: $0 <domain>"
     exit 1
