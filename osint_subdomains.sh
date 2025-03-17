@@ -36,15 +36,15 @@ fi
 #Output file for results
 OutputFile="subdomains_$domain.txt"
 
-echo "${YELLOW}--->${NC}Running Subfinder on $domain"
+echo "${YELLOW}===>${NC}Running Subfinder on $domain"
 subfinder -d $domain -o subfinder_results.txt
 
-echo "${YELLOW}--->${NC}Running Amass on $domain (passive mode)"
+echo "${YELLOW}===>${NC}Running Amass on $domain (passive mode)"
 echo "⏳Patience...(this may take a while)"
 amass enum -passive -d $domain -o amass_results.txt
 
-echo "${YELLOW}--->${NC}Merging, organizing and sorting results..."
-echo "${YELLOW}--->${NC}Removing duplicates..."
+echo "${YELLOW}===>${NC}Merging, organizing and sorting results..."
+echo "${YELLOW}===>${NC}Removing duplicates..."
 cat subfinder_results.txt amass_results.txt | sort -u > $OutputFile
 
 echo "${GREEN}*Enumeration complete.${NC} Results saved to $OutputFile"
