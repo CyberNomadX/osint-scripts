@@ -29,6 +29,7 @@ else
 fi
 
 if [ -z "$domain" ]; then
+    echo "${RED}❌Error: No domain provided.${NC}"
     echo "⚠️Usage: $0 <domain>"
     exit 1
 fi
