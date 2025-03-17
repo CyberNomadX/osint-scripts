@@ -2,6 +2,15 @@
 domain=$1
 
 #TODO: Add checks for tools required
+#Check if subfinder is installed
+if command -v subfinder >&2; then
+    echo "✅ Subfinder is installed"
+else
+    echo "❌ Subfinder is not installed"
+    echo "Please install subfinder and try again"
+    read -p "Press [Enter] to exit the process"
+    exit 1
+fi
 
 
 if [ -z "$domain" ]; then
