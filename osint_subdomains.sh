@@ -45,7 +45,11 @@ echo "⏳Patience...(this may take a while)"
 amass enum -passive -d $domain -o amass_results.txt
 
 echo "${YELLOW}===>${NC}Merging, organizing and sorting results..."
-echo "${YELLOW}===>${NC}Removing duplicates..."
+echo "${YELLOW}===>${NC}Removing duplicates...(Not working currently)"
 cat subfinder_results.txt amass_results.txt | sort -u > $OutputFile
 
 echo "${GREEN}*Enumeration complete.${NC} Results saved to $OutputFile"
+
+TODO:
+# Is it possible to add a feature to filter for interesting results?
+# Removeing duplicates is not working properly. Need to fix that.
