@@ -1,3 +1,8 @@
+#Output file for results
+output_file="subdomains_$domain.txt"
+
+#Set domain from argument.
+domain="$1"
 
 #Define color variables
 RED=$(tput setaf 1)
@@ -5,26 +10,21 @@ GREEN=$(tput setaf 2)
 YELLOW=$(tput setaf 3)
 NC=$(tput sgr0)
 
-#Set domain from arguement.
-domain=$1
-
 #Check if subfinder is installed
-if command -v subfinder >&2; then
+if which subfinder &> /dev/null; then
     echo "${GREEN} ✅Subfinder is installed.${NC}"
 else
     echo "${RED}❌Subfinder is not installed.${NC}"
     echo "${YELLOW}Please install subfinder and try again.${NC}"
-    read -p "${YELLOW}Press [Enter] to exit the process.${NC}"
     exit 1
 fi
 
 #Check if amass is installed
-if command -v amass >&2; then
+if which amass &> /dev/null; then
     echo "${GREEN} ✅Amass is installed${NC}"
 else
     echo "${RED}❌Amass is not installed.${NC}"
     echo "${YELLOW}Please install amass and try again.${NC}"
-    read -p "${YELLOW}Press [Enter] to exit the process.${NC}"
     exit 1
 fi
 
@@ -33,9 +33,6 @@ if [ -z "$domain" ]; then
     echo "⚠️Usage: $0 <domain>"
     exit 1
 fi
-
-#Output file for results
-OutputFile="subdomains_$domain.txt"
 
 echo "${YELLOW}===>${NC}Running Subfinder on $domain"
 subfinder -d $domain -o subfinder_results.txt
@@ -46,9 +43,14 @@ amass enum -passive -d $domain -o amass_results.txt
 
 echo "${YELLOW}===>${NC}Merging, organizing and sorting results..."
 echo "${YELLOW}===>${NC}Removing duplicates...(Not working currently)"
-cat subfinder_results.txt amass_results.txt | sort -u > $OutputFile
+cat subfinder_results.txt amass_results.txt | sort -u > $output_file
 
-echo "${GREEN}*Enumeration complete.${NC} Results saved to $OutputFile"
+echo "${GREEN}*Enumeration complete.${NC} Results saved to $output_file"
+
+echo "${YELLOW}===>${NC}Cleaning up directories..."
+rm subfinder_results.txt amass_results.txt
+echo "${GREEN}*Cleanup complete.${NC}"
+echo "${YELLOW}===>${NC}Exiting..."
 
 TODO:
 # Is it possible to add a feature to filter for interesting results?
