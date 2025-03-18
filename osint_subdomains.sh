@@ -52,6 +52,6 @@ rm subfinder_results.txt amass_results.txt
 echo "${GREEN}*Cleanup complete.${NC}"
 echo "${YELLOW}===>${NC}Exiting..."
 
-TODO:
+#TODO:
 # Is it possible to add a feature to filter for interesting results?
 # Removeing duplicates is not working properly. Need to fix that.
