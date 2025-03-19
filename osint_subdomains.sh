@@ -10,6 +10,19 @@ GREEN=$(tput setaf 2)
 YELLOW=$(tput setaf 3)
 NC=$(tput sgr0)
 
+#Check if help flag is passed
+if [[ "$domain" =~ ^-h|--help$ ]]; then
+    echo "Usage: $0 <domain>"
+    echo "Example: $0 example.com"
+    exit 0
+fi
+
+#Check if domain is valid
+if [[ ! "$domain" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+    echo "${RED}❌Error: Invalid domain format.${NC}"
+    exit 1
+fi
+
 #Check if subfinder is installed
 if which subfinder &> /dev/null; then
     echo "${GREEN} ✅Subfinder is installed.${NC}"
