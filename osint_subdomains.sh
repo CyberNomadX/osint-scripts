@@ -10,12 +10,24 @@ GREEN=$(tput setaf 2)
 YELLOW=$(tput setaf 3)
 NC=$(tput sgr0)
 
-#Check if help flag is passed
-if [[ "$domain" =~ ^-h|--help$ ]]; then
+# Check for flags
+while [[ $# -gt 0 ]]; do case $1 in
+  -h | --help) 
+    echo "Subdomain Enumeration Script"
+    echo ""
     echo "Usage: $0 <domain>"
     echo "Example: $0 example.com"
+    echo ""
+    echo "Options:"
+    echo "  -f, --filter | Filter for interesting results"
     exit 0
-fi
+    ;;
+  -f | --filter) 
+    filter=true
+    ;; 
+esac; shift; done
+if [[ "$1" == '--' ]]; then shift; fi
+
 
 #Check if domain is valid
 if [[ ! "$domain" =~ ^[a-zA-Z0-9.-]+$ ]]; then
@@ -68,3 +80,6 @@ echo "${YELLOW}===>${NC}Exiting..."
 #TODO:
 # Is it possible to add a feature to filter for interesting results?
 # Removeing duplicates is not working properly. Need to fix that.
+# Can both scans be ran simultaneously?
+# Add more tools to the script.
+# Add more error handling.
