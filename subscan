@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 
 #Set domain from argument.
 domain="$1"
