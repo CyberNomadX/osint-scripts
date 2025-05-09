@@ -21,7 +21,7 @@ while [[ $# -gt 0 ]]; do case $1 in
     echo "Example: $0 example.com"
     echo ""
     echo "Options:"
-    echo "  -f, --filter | Filter for interesting results"
+    echo "  -f, --filter | Filter for interesting results(WIP, Not Functional Currently)"
     exit 0
     ;;
   -f | --filter) 
