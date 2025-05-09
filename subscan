@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+
+#Set domain from argument.
+domain="$1"
+
+#Output file for results
+output_file="subdomains_$domain.txt"
+
+#Define color variables
+RED=$(tput setaf 1)
+GREEN=$(tput setaf 2)
+YELLOW=$(tput setaf 3)
+NC=$(tput sgr0)
+
+# Check for flags
+while [[ $# -gt 0 ]]; do case $1 in
+  -h | --help) 
+    echo "Subdomain Enumeration Script"
+    echo ""
+    echo "Usage: $0 <domain>"
+    echo "Example: $0 example.com"
+    echo ""
+    echo "Options:"
+    echo "  -f, --filter | Filter for interesting results"
+    exit 0
+    ;;
+  -f | --filter) 
+    filter=true
+    ;; 
+esac; shift; done
+if [[ "$1" == '--' ]]; then shift; fi
+
+
+#Check if domain is valid
+if [[ ! "$domain" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+    echo "${RED}❌Error: Invalid domain format.${NC}"
+    exit 1
+fi
+
+#Check if subfinder is installed
+if which subfinder &> /dev/null; then
+    echo "${GREEN} ✅Subfinder is installed.${NC}"
+else
+    echo "${RED}❌Subfinder is not installed.${NC}"
+    echo "${YELLOW}Please install subfinder and try again.${NC}"
+    exit 1
+fi
+
+#Check if amass is installed
+if which amass &> /dev/null; then
+    echo "${GREEN} ✅Amass is installed${NC}"
+else
+    echo "${RED}❌Amass is not installed.${NC}"
+    echo "${YELLOW}Please install amass and try again.${NC}"
+    exit 1
+fi
+
+if [ -z "$domain" ]; then
+    echo "${RED}❌Error: No domain provided.${NC}"
+    echo "⚠️Usage: $0 <domain>"
+    exit 1
+fi
+
+echo "${YELLOW}===>${NC}Running Subfinder on $domain"
+subfinder -d $domain -o subfinder_results.txt
+
+echo "${YELLOW}===>${NC}Running Amass on $domain (passive mode)"
+echo "⏳Patience...(this may take a while)"
+amass enum -passive -d $domain -o amass_results.txt
+
+echo "${YELLOW}===>${NC}Merging, organizing and sorting results..."
+echo "${YELLOW}===>${NC}Removing duplicates...(Not working currently)"
+cat subfinder_results.txt amass_results.txt | sort -u > $output_file
+
+echo "${GREEN}*Enumeration complete.${NC} Results saved to $output_file"
+
+echo "${YELLOW}===>${NC}Cleaning up directories..."
+rm subfinder_results.txt amass_results.txt
+echo "${GREEN}*Cleanup complete.${NC}"
+echo "${YELLOW}===>${NC}Exiting..."
+
+#TODO:
+# Is it possible to add a feature to filter for interesting results?
+# Removeing duplicates is not working properly. Need to fix that.
+# Can both scans be ran simultaneously?
+# Add more tools to the script.
+# Add more error handling.

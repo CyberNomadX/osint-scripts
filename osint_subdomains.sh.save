@@ -10,6 +10,19 @@ GREEN=$(tput setaf 2)
 YELLOW=$(tput setaf 3)
 NC=$(tput sgr0)
 
+#Check if help flag is passed
+if [[ "$domain" =~ ^-h|--help$ ]]; then
+    echo "Usage: $0 <domain>"
+    echo "Example: $0 example.com"
+    exit 0
+fi
+
+#Check if domain is valid
+if [[ ! "$domain" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+    echo "${RED}❌Error: Invalid domain format.${NC}"
+    exit 1
+fi
+
 #Check if subfinder is installed
 if which subfinder &> /dev/null; then
     echo "${GREEN} ✅Subfinder is installed.${NC}"
@@ -34,23 +47,23 @@ if [ -z "$domain" ]; then
     exit 1
 fi
 
-echo "${YELLOW}===>${NC}Running Subfinder on $domain"
+echo "${YELLOW}===>${NC} Running Subfinder on $domain"
 subfinder -d $domain -o subfinder_results.txt
 
-echo "${YELLOW}===>${NC}Running Amass on $domain (passive mode)"
+echo "${YELLOW}===>${NC} Running Amass on $domain (passive mode)"
 echo "⏳Patience...(this may take a while)"
 amass enum -passive -d $domain -o amass_results.txt
 
-echo "${YELLOW}===>${NC}Merging, organizing and sorting results..."
-echo "${YELLOW}===>${NC}Removing duplicates...(Not working currently)"
+echo "${YELLOW}===>${NC} Merging, organizing and sorting results..."
+echo "${YELLOW}===>${NC} Removing duplicates...(Not working currently)"
 cat subfinder_results.txt amass_results.txt | sort -u > $output_file
 
 echo "${GREEN}*Enumeration complete.${NC} Results saved to $output_file"
 
-echo "${YELLOW}===>${NC}Cleaning up directories..."
+echo "${YELLOW}===>${NC} Cleaning up directories..."
 rm subfinder_results.txt amass_results.txt
 echo "${GREEN}*Cleanup complete.${NC}"
-echo "${YELLOW}===>${NC}Exiting..."
+echo "${YELLOW}===>${NC} Exiting..."
 
 #TODO:
 # Is it possible to add a feature to filter for interesting results?
