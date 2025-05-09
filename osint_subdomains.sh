@@ -1,8 +1,9 @@
-#Output file for results
-output_file="subdomains_$domain.txt"
 
 #Set domain from argument.
 domain="$1"
+
+#Output file for results
+output_file="subdomains_$domain.txt"
 
 #Define color variables
 RED=$(tput setaf 1)
