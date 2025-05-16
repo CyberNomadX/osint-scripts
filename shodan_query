@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# Shodan CLI Bash Script - User Input Version
+echo "=== Shodan Target Recon ==="
+
+#Prompt for search
+read -rp "Target domain (e.g., website.com): " TARGET
+
+# Prompt for result limit
+read -rp "Enter number of results to retrieve: " LIMIT
+
+# Prompt for file name
+read -rp "Enter filename to save IPs (default: shodan_scan.txt): " IP_FILE
+IP_FILE=${IP_FILE:-shodan_scan.txt}
+
+#Build queries
+QUERIES=(
+	"hostname:$TARGET"
+	"ssl.cert.subject.CN:*.$TARGET"
+	"http.title:dev hostname:$TARGET"
+	"http.component:nginx hostname:$TARGET"
+	"port:9200 hostname:$TARGET"
+	"product:MongoDB hostname:$TARGET"
+)
+
+# Clear previous results
+> "$IP_FILE"
+
+# Run queries
+for q in "${QUERIES[@]}"; do
+	echo -e "\n[INFO] Running query: $q"
+	RESULTS=$(shodan search --limit "$LIMIT" --fields ip_str "$q" 2>/dev/null)
+
+	if [[ $? -ne 0 || -z "$RESULTS" ]]; then
+	continue
+	fi
+
+	echo "$RESULTS" >> "$IP_FILE"
+done
+
+# Remove duplicate IPs
+sort -u "$IP_FILE" -o "$IP_FILE"
+echo "[INFO] Saved unique IP addresses to $IP_FILE"
+
+# Optional nmap
+read -rp "Do you want to run nmap on each IP? (y/N): " SCAN_CHOICE
+
+if [[ "$SCAN_CHOICE" =~ ^[Yy]$ ]]; then
+	while IFS= read -r ip; do
+		echo "[+] Scanning $ip..."
+		nmap -sS -Pn -T4 "$ip"
+		echo "______________________________"
+	done < "$IP_FILE"
+else
+	echo "[*] Skipping nmap scans."
+fi
+
+echo "[✅] Scans completed."
