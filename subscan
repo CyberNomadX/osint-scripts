@@ -63,6 +63,7 @@ fi
 
 echo "${YELLOW}===>${NC}Running Subfinder on $domain"
 subfinder -d $domain -o subfinder_results.txt
+cp subfinder_results.txt domains.txt
 
 echo "${YELLOW}===>${NC}Running Amass on $domain (passive mode)"
 echo "⏳Patience...(this may take a while)"

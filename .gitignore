@@ -24,3 +24,6 @@ config.json
 .env
 *.key
 *.pem
+
+osint_subdomains.sh.save
+

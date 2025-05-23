@@ -1,0 +1,105 @@
+#!/bin/bash
+
+# ─────────────────────────────
+# asaudit – Attack Surface Audit Script
+# Author: You (Kyle Duffy)
+# Description: Performs passive web asset analysis with plaintext explanations.
+# Dependencies: curl, dig, openssl, tee, grep, timeout
+# ─────────────────────────────
+
+# Input handling
+DOMAINS=()
+if [[ $# -gt 0 ]]; then
+    DOMAINS=("$@")
+else
+    if [[ -f domains.txt ]]; then
+        mapfile -t DOMAINS < domains.txt
+    else
+        echo "❌ No domain arguments provided and domains.txt not found."
+        exit 1
+    fi
+fi
+
+# Output directory
+OUTPUT_DIR="results"
+mkdir -p "$OUTPUT_DIR"
+
+# Main audit loop
+for domain in "${DOMAINS[@]}"; do
+    echo "[SCAN] Analyzing $domain..."
+
+    {
+        echo "===== $domain ====="
+        echo "Date: $(date)"
+        echo
+
+        echo "🔍 IP Resolution:"
+        IPs=$(dig +short "$domain")
+        echo "$IPs"
+        if [[ -z "$IPs" ]]; then
+            echo "⚠️  No IPs found — domain may be inactive."
+        else
+            echo "✅ Domain resolved to IP(s)."
+        fi
+        echo
+
+        echo "🌐 HTTP Redirect Chain (Port 80):"
+        curl -IL --max-redirs 5 --connect-timeout 5 --silent "http://$domain" | tee /tmp/headers_http.txt
+        if grep -q "Location:" /tmp/headers_http.txt; then
+            echo "🔁 HTTP redirects to another location. Check for downgrade-to-HTTP risk if HSTS is not enforced."
+        else
+            echo "ℹ️  No HTTP redirect detected."
+        fi
+        echo
+
+        echo "🔐 HTTPS Certificate Info:"
+        openssl_output=$(timeout 5 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null 2>/dev/null)
+        if [[ $? -ne 0 ]]; then
+            echo "❌ Could not connect via HTTPS (port 443). TLS handshake failed."
+        else
+            echo "$openssl_output" | openssl x509 -noout -issuer -subject -dates
+            echo "✅ Valid TLS certificate detected."
+        fi
+        echo
+
+        echo "📋 Security Headers (HTTPS):"
+        curl -sI "https://$domain" | grep -Ei 'server:|x-powered-by|content-security-policy|x-frame-options|x-xss-protection|strict-transport-security' | tee /tmp/headers_tls.txt
+        echo
+
+        if grep -qi 'x-frame-options' /tmp/headers_tls.txt; then
+            echo "✅ X-Frame-Options is set (clickjacking protection)."
+        else
+            echo "⚠️  X-Frame-Options missing."
+        fi
+
+        if grep -qi 'content-security-policy' /tmp/headers_tls.txt; then
+            echo "✅ Content-Security-Policy is set (helps prevent XSS)."
+        else
+            echo "⚠️  No Content-Security-Policy header."
+        fi
+
+        if grep -qi 'strict-transport-security' /tmp/headers_tls.txt; then
+            echo "✅ HSTS is enabled (protects against downgrade attacks)."
+        else
+            echo "⚠️  HSTS not detected."
+        fi
+        echo
+
+        echo "📬 MX Record Check (Mail Servers):"
+        mx=$(dig +short MX "$domain")
+        echo "$mx"
+        if [[ -z "$mx" ]]; then
+            echo "⚠️  No MX records found. Domain may not be configured for email."
+        else
+            echo "✅ MX records found — email appears configured."
+        fi
+        echo
+
+    } > "$OUTPUT_DIR/$domain.txt"
+done
+
+echo "[INFO] Cleaning up directory...."
+rm domains.txt
+echo "[INFO] Directory cleaned..."
+
+echo "[✓] Scans complete. Results saved in the 'results' directory."
