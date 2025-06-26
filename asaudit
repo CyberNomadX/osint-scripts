@@ -102,4 +102,4 @@ echo "[INFO] Cleaning up directory...."
 rm domains.txt
 echo "[INFO] Directory cleaned..."
 
-echo "[✓] Scans complete. Results saved in the 'results' directory."
+echo "[✓] Scans complete. Results saved in the 'asaudit_results' directory."
