@@ -1,58 +1,96 @@
 #!/bin/bash
 
-# Shodan CLI Bash Script - User Input Version
+# ─────────────────────────────
+# shodan_query – Shodan Target Recon
+# Author: CyberNomadX
+# Usage: shodan_query [domain] [limit] [output_file]
+#        Run without arguments for interactive mode.
+# ─────────────────────────────
+
 echo "=== Shodan Target Recon ==="
 
-#Prompt for search
-read -rp "Target domain (e.g., website.com): " TARGET
+# Dependency checks
+if ! command -v shodan &>/dev/null; then
+    echo "❌ Shodan CLI is not installed."
+    echo "   Install with: pip install shodan"
+    echo "   Then configure with: shodan init <YOUR_API_KEY>"
+    exit 1
+fi
 
-# Prompt for result limit
-read -rp "Enter number of results to retrieve: " LIMIT
+# Verify the API key is configured and valid
+if ! shodan info &>/dev/null; then
+    echo "❌ Shodan API key is not configured or is invalid."
+    echo "   Run: shodan init <YOUR_API_KEY>"
+    exit 1
+fi
 
-# Prompt for file name
-read -rp "Enter filename to save IPs (default: shodan_scan.txt): " IP_FILE
-IP_FILE=${IP_FILE:-shodan_scan.txt}
+# Accept arguments or fall back to interactive prompts
+if [[ $# -ge 1 ]]; then
+    TARGET="$1"
+    LIMIT="${2:-10}"
+    IP_FILE="${3:-shodan_scan.txt}"
+else
+    read -rp "Target domain (e.g., website.com): " TARGET
+    read -rp "Enter number of results to retrieve: " LIMIT
+    read -rp "Enter filename to save IPs (default: shodan_scan.txt): " IP_FILE
+    IP_FILE="${IP_FILE:-shodan_scan.txt}"
+fi
 
-#Build queries
+if [[ -z "$TARGET" ]]; then
+    echo "❌ No target domain provided."
+    exit 1
+fi
+
+# Queries — tailored to common attack surface indicators
 QUERIES=(
-	"hostname:$TARGET"
-	"ssl.cert.subject.CN:*.$TARGET"
-	"http.title:dev hostname:$TARGET"
-	"http.component:nginx hostname:$TARGET"
-	"port:9200 hostname:$TARGET"
-	"product:MongoDB hostname:$TARGET"
+    "hostname:$TARGET"
+    "ssl.cert.subject.CN:*.$TARGET"
+    "http.title:dev hostname:$TARGET"
+    "http.component:nginx hostname:$TARGET"
+    "port:9200 hostname:$TARGET"
+    "product:MongoDB hostname:$TARGET"
+    "port:3389 hostname:$TARGET"            # Exposed RDP
+    "port:22 hostname:$TARGET"              # Exposed SSH
 )
 
-# Clear previous results
 > "$IP_FILE"
 
-# Run queries
 for q in "${QUERIES[@]}"; do
-	echo -e "\n[INFO] Running query: $q"
-	RESULTS=$(shodan search --limit "$LIMIT" --fields ip_str "$q" 2>/dev/null)
+    echo -e "\n[INFO] Running query: $q"
+    RESULTS=$(shodan search --limit "$LIMIT" --fields ip_str "$q" 2>/dev/null)
 
-	if [[ $? -ne 0 || -z "$RESULTS" ]]; then
-	continue
-	fi
+    if [[ $? -ne 0 || -z "$RESULTS" ]]; then
+        echo "   (no results)"
+        continue
+    fi
 
-	echo "$RESULTS" >> "$IP_FILE"
+    echo "$RESULTS" >> "$IP_FILE"
 done
 
-# Remove duplicate IPs
 sort -u "$IP_FILE" -o "$IP_FILE"
-echo "[INFO] Saved unique IP addresses to $IP_FILE"
+UNIQUE_COUNT=$(wc -l < "$IP_FILE")
+echo -e "\n[INFO] Saved ${UNIQUE_COUNT} unique IP address(es) to $IP_FILE"
 
-# Optional nmap
+# Optional nmap scan
 read -rp "Do you want to run nmap on each IP? (y/N): " SCAN_CHOICE
 
 if [[ "$SCAN_CHOICE" =~ ^[Yy]$ ]]; then
-	while IFS= read -r ip; do
-		echo "[+] Scanning $ip..."
-		nmap -sS -Pn -T4 "$ip"
-		echo "______________________________"
-	done < "$IP_FILE"
+    # -sS (SYN scan) requires root. Fall back to -sT (connect scan) if not root.
+    if [[ $EUID -eq 0 ]]; then
+        NMAP_FLAGS="-sS -Pn -T4"
+    else
+        echo "⚠️  Not running as root — using TCP connect scan (-sT) instead of SYN scan (-sS)."
+        NMAP_FLAGS="-sT -Pn -T4"
+    fi
+
+    while IFS= read -r ip; do
+        [[ -z "$ip" ]] && continue
+        echo "[+] Scanning $ip..."
+        nmap $NMAP_FLAGS "$ip"
+        echo "______________________________"
+    done < "$IP_FILE"
 else
-	echo "[*] Skipping nmap scans."
+    echo "[*] Skipping nmap scans."
 fi
 
 echo "[✅] Scans completed."

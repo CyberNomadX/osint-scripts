@@ -2,104 +2,193 @@
 
 # ─────────────────────────────
 # asaudit – Attack Surface Audit Script
-# Author: You (Kyle Duffy)
+# Author: CyberNomadX
 # Description: Performs passive web asset analysis with plaintext explanations.
-# Dependencies: curl, dig, openssl, tee, grep, timeout
+# Dependencies: curl, dig, openssl, grep, timeout
 # ─────────────────────────────
 
-# Input handling
 DOMAINS=()
+USED_FILE=false  # Track whether we loaded from domains.txt
+
 if [[ $# -gt 0 ]]; then
     DOMAINS=("$@")
+elif [[ -f domains.txt ]]; then
+    mapfile -t DOMAINS < domains.txt
+    USED_FILE=true
 else
-    if [[ -f domains.txt ]]; then
-        mapfile -t DOMAINS < domains.txt
-    else
-        echo "❌ No domain arguments provided and domains.txt not found."
-        exit 1
-    fi
+    echo "❌ No domain arguments provided and domains.txt not found."
+    exit 1
 fi
 
-# Output directory
 OUTPUT_DIR="asaudit_results"
 mkdir -p "$OUTPUT_DIR"
 
-# Main audit loop
 for domain in "${DOMAINS[@]}"; do
+    # Skip blank lines (common when reading from a file)
+    [[ -z "$domain" ]] && continue
+
     echo "[SCAN] Analyzing $domain..."
+
+    # Use per-domain temp files to avoid stale data across iterations
+    TMP_HTTP=$(mktemp)
+    TMP_TLS=$(mktemp)
 
     {
         echo "===== $domain ====="
         echo "Date: $(date)"
         echo
 
+        # ── IP Resolution ──────────────────────────────────────────────────
         echo "🔍 IP Resolution:"
-        IPs=$(dig +short "$domain")
+        IPs=$(dig +short "$domain" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
         echo "$IPs"
         if [[ -z "$IPs" ]]; then
-            echo "⚠️  No IPs found — domain may be inactive."
+            echo "⚠️  No IPs found — domain may be inactive or CNAME-only."
         else
             echo "✅ Domain resolved to IP(s)."
         fi
         echo
 
+        # ── CNAME Check (subdomain takeover indicator) ─────────────────────
+        echo "🔗 CNAME Check:"
+        cname=$(dig +short CNAME "$domain")
+        if [[ -n "$cname" ]]; then
+            echo "   CNAME → $cname"
+            echo "ℹ️  Domain uses a CNAME — verify the target is still active (dangling CNAME = takeover risk)."
+        else
+            echo "ℹ️  No CNAME detected (direct A record)."
+        fi
+        echo
+
+        # ── HTTP Redirect Chain ────────────────────────────────────────────
         echo "🌐 HTTP Redirect Chain (Port 80):"
-        curl -IL --max-redirs 5 --connect-timeout 5 --silent "http://$domain" | tee /tmp/headers_http.txt
-        if grep -q "Location:" /tmp/headers_http.txt; then
-            echo "🔁 HTTP redirects to another location. Check for downgrade-to-HTTP risk if HSTS is not enforced."
+        curl -IL --max-redirs 5 --connect-timeout 5 --silent "http://$domain" > "$TMP_HTTP"
+        cat "$TMP_HTTP"
+        if grep -q "Location:" "$TMP_HTTP"; then
+            echo "🔁 HTTP redirects detected. Check for downgrade-to-HTTP risk if HSTS is not enforced."
         else
             echo "ℹ️  No HTTP redirect detected."
         fi
         echo
 
+        # ── TLS Certificate ────────────────────────────────────────────────
         echo "🔐 HTTPS Certificate Info:"
-        openssl_output=$(timeout 5 openssl s_client -connect "$domain:443" -servername "$domain" </dev/null 2>/dev/null)
-        if [[ $? -ne 0 ]]; then
-            echo "❌ Could not connect via HTTPS (port 443). TLS handshake failed."
+        openssl_output=$(timeout 5 openssl s_client -connect "$domain:443" \
+            -servername "$domain" </dev/null 2>/dev/null)
+        if [[ $? -ne 0 || -z "$openssl_output" ]]; then
+            echo "❌ Could not connect via HTTPS (port 443). TLS handshake failed or timed out."
         else
-            echo "$openssl_output" | openssl x509 -noout -issuer -subject -dates
-            echo "✅ Valid TLS certificate detected."
+            if echo "$openssl_output" | openssl x509 -noout -issuer -subject -dates 2>/dev/null; then
+                echo "✅ Valid TLS certificate detected."
+                # Show negotiated protocol version if available
+                proto=$(echo "$openssl_output" | grep -i "Protocol  :" | awk '{print $NF}')
+                [[ -n "$proto" ]] && echo "   Negotiated Protocol: $proto"
+            else
+                echo "⚠️  TLS connection established but certificate could not be parsed."
+            fi
         fi
         echo
 
-        echo "📋 Security Headers (HTTPS):"
-        curl -sI "https://$domain" | grep -Ei 'server:|x-powered-by|content-security-policy|x-frame-options|x-xss-protection|strict-transport-security' | tee /tmp/headers_tls.txt
+        # ── Security Headers ───────────────────────────────────────────────
+        echo "📋 Security Headers (HTTPS, following redirects):"
+        # -L follows redirects so headers are checked on the final destination
+        curl -sIL --max-redirs 5 --connect-timeout 5 "https://$domain" > "$TMP_TLS"
+        grep -Ei 'server:|x-powered-by|content-security-policy|x-frame-options|x-xss-protection|strict-transport-security|permissions-policy|referrer-policy' "$TMP_TLS" || true
         echo
 
-        if grep -qi 'x-frame-options' /tmp/headers_tls.txt; then
+        if grep -qi 'x-frame-options' "$TMP_TLS"; then
             echo "✅ X-Frame-Options is set (clickjacking protection)."
         else
             echo "⚠️  X-Frame-Options missing."
         fi
 
-        if grep -qi 'content-security-policy' /tmp/headers_tls.txt; then
+        if grep -qi 'content-security-policy' "$TMP_TLS"; then
             echo "✅ Content-Security-Policy is set (helps prevent XSS)."
         else
             echo "⚠️  No Content-Security-Policy header."
         fi
 
-        if grep -qi 'strict-transport-security' /tmp/headers_tls.txt; then
+        if grep -qi 'strict-transport-security' "$TMP_TLS"; then
             echo "✅ HSTS is enabled (protects against downgrade attacks)."
         else
             echo "⚠️  HSTS not detected."
         fi
+
+        if grep -qi 'permissions-policy' "$TMP_TLS"; then
+            echo "✅ Permissions-Policy header is present."
+        else
+            echo "⚠️  Permissions-Policy header missing."
+        fi
         echo
 
-        echo "📬 MX Record Check (Mail Servers):"
+        # ── DNS Email Security ─────────────────────────────────────────────
+        echo "📧 Email Security (DNS Records):"
+
+        spf=$(dig +short TXT "$domain" | grep -i 'v=spf1' | tr -d '"')
+        if [[ -n "$spf" ]]; then
+            echo "✅ SPF record found:"
+            echo "   $spf"
+        else
+            echo "⚠️  No SPF record — this domain may be spoofable in phishing emails."
+        fi
+
+        dmarc=$(dig +short TXT "_dmarc.$domain" | tr -d '"')
+        if [[ -n "$dmarc" ]]; then
+            echo "✅ DMARC record found:"
+            echo "   $dmarc"
+            if echo "$dmarc" | grep -qi 'p=reject'; then
+                echo "   Policy: reject ✅ (strict — recommended)"
+            elif echo "$dmarc" | grep -qi 'p=quarantine'; then
+                echo "   Policy: quarantine ⚠️  (consider upgrading to reject)"
+            else
+                echo "   Policy: none ⚠️  (monitoring only — domain is not protected)"
+            fi
+        else
+            echo "⚠️  No DMARC record — domain is unprotected against email spoofing."
+        fi
+
+        echo "ℹ️  DKIM check requires knowing the selector; run:"
+        echo "   dig +short TXT <selector>._domainkey.$domain"
+        echo
+
+        # ── MX Records ────────────────────────────────────────────────────
+        echo "📬 MX Records (Mail Servers):"
         mx=$(dig +short MX "$domain")
-        echo "$mx"
         if [[ -z "$mx" ]]; then
             echo "⚠️  No MX records found. Domain may not be configured for email."
         else
+            echo "$mx"
             echo "✅ MX records found — email appears configured."
         fi
         echo
 
+        # ── CAA Records ───────────────────────────────────────────────────
+        echo "🏷️  CAA Records (Certificate Authority Authorization):"
+        caa=$(dig +short CAA "$domain")
+        if [[ -n "$caa" ]]; then
+            echo "$caa"
+            echo "✅ CAA records restrict which CAs can issue certs for this domain."
+        else
+            echo "⚠️  No CAA records — any CA can issue a certificate for this domain."
+        fi
+        echo
+
+        # ── Name Servers ──────────────────────────────────────────────────
+        echo "🌍 Name Servers:"
+        dig +short NS "$domain"
+        echo
+
     } > "$OUTPUT_DIR/$domain.txt"
+
+    # Clean up per-domain temp files immediately after each scan
+    rm -f "$TMP_HTTP" "$TMP_TLS"
 done
 
-echo "[INFO] Cleaning up directory...."
-rm domains.txt
-echo "[INFO] Directory cleaned..."
+# Only remove domains.txt if it was actually used as the input source
+if [[ "$USED_FILE" == true ]]; then
+    echo "[INFO] Cleaning up domains.txt..."
+    rm -f domains.txt
+    echo "[INFO] Cleanup complete."
+fi
 
-echo "[✓] Scans complete. Results saved in the 'asaudit_results' directory."
+echo "[✓] Scans complete. Results saved in '$OUTPUT_DIR/'"
