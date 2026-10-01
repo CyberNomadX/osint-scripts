@@ -1,37 +1,117 @@
-#!/bin/bash
-
+#!/usr/bin/env bash
 # ─────────────────────────────
 # asaudit – Attack Surface Audit Script
 # Author: CyberNomadX
 # Description: Performs passive web asset analysis with plaintext explanations.
-# Dependencies: curl, dig, openssl, grep, timeout
+# Dependencies: curl, dig, openssl, grep, xargs (timeout/gtimeout optional)
+#
+# Usage:
+#   asaudit [-j JOBS] [-l] [domain ...]
+#   asaudit                 # reads domains.txt (as written by subscan)
+#
+# Options:
+#   -j JOBS   Parallel scans (default: 8)
+#   -l        Live-only: skip names that do not resolve in DNS
+#   -h        Help
 # ─────────────────────────────
 
-DOMAINS=()
-USED_FILE=false  # Track whether we loaded from domains.txt
+JOBS=8
+LIVE_ONLY=false
 
+while getopts ":j:lh" opt; do
+    case "$opt" in
+        j) JOBS="$OPTARG" ;;
+        l) LIVE_ONLY=true ;;
+        h) sed -n '2,16p' "$0"; exit 0 ;;
+        :) echo "❌ Option -$OPTARG needs a value."; exit 1 ;;
+        *) echo "❌ Unknown option: -$OPTARG"; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [[ ! "$JOBS" =~ ^[0-9]+$ || "$JOBS" -lt 1 ]]; then
+    echo "❌ -j needs a positive number."
+    exit 1
+fi
+
+for dep in dig curl openssl xargs; do
+    command -v "$dep" &>/dev/null || { echo "❌ Missing dependency: $dep"; exit 1; }
+done
+
+# Timeout command: GNU timeout, or gtimeout on macOS (brew install coreutils)
+if command -v timeout &>/dev/null; then
+    TIMEOUT_CMD="timeout"
+elif command -v gtimeout &>/dev/null; then
+    TIMEOUT_CMD="gtimeout"
+else
+    TIMEOUT_CMD=""
+    echo "⚠️  No timeout/gtimeout found; TLS check will rely on openssl's own behavior."
+fi
+
+# ── Load input (bash 3.2-safe; no mapfile) ────────────────────────────────────
+RAW=()
 if [[ $# -gt 0 ]]; then
-    DOMAINS=("$@")
+    RAW=("$@")
 elif [[ -f domains.txt ]]; then
-    mapfile -t DOMAINS < domains.txt
-    USED_FILE=true
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        RAW+=("$line")
+    done < domains.txt
 else
     echo "❌ No domain arguments provided and domains.txt not found."
     exit 1
 fi
 
+# ── Clean and validate every entry ────────────────────────────────────────────
+DOMAINS=()
+for d in "${RAW[@]}"; do
+    d="${d//$'\r'/}"                 # strip CR from Windows line endings
+    d="${d//[[:space:]]/}"           # strip whitespace
+    d="${d%.}"                       # strip trailing dot
+    d="$(printf '%s' "$d" | tr '[:upper:]' '[:lower:]')"
+    [[ -z "$d" || "$d" == \#* ]] && continue
+    if [[ ! "$d" =~ ^[a-z0-9_]([a-z0-9_.-]*[a-z0-9])?$ ]]; then
+        echo "[SKIP] Bad entry: $d"
+        continue
+    fi
+    DOMAINS+=("$d")
+done
+
+if [[ ${#DOMAINS[@]} -eq 0 ]]; then
+    echo "❌ No valid domains to scan."
+    exit 1
+fi
+
+# De-duplicate while preserving order
+UNIQUE=()
+while IFS= read -r d; do UNIQUE+=("$d"); done < <(printf '%s\n' "${DOMAINS[@]}" | awk '!seen[$0]++')
+DOMAINS=("${UNIQUE[@]}")
+
 OUTPUT_DIR="asaudit_results"
 mkdir -p "$OUTPUT_DIR"
 
-for domain in "${DOMAINS[@]}"; do
-    # Skip blank lines (common when reading from a file)
-    [[ -z "$domain" ]] && continue
+# ── Optional DNS pre-filter ───────────────────────────────────────────────────
+if [[ "$LIVE_ONLY" == true ]]; then
+    echo "[INFO] Pre-filtering ${#DOMAINS[@]} names for DNS resolution..."
+    LIVE=()
+    while IFS= read -r d; do LIVE+=("$d"); done < <(
+        printf '%s\n' "${DOMAINS[@]}" | xargs -P 20 -I{} sh -c \
+            'if [ -n "$(dig +short +time=2 +tries=1 "$1")" ]; then echo "$1"; fi' _ {}
+    )
+    echo "[INFO] ${#LIVE[@]} of ${#DOMAINS[@]} names resolve."
+    DOMAINS=("${LIVE[@]}")
+    if [[ ${#DOMAINS[@]} -eq 0 ]]; then
+        echo "❌ Nothing resolved; nothing to scan."
+        exit 0
+    fi
+fi
 
-    echo "[SCAN] Analyzing $domain..."
-
-    # Use per-domain temp files to avoid stale data across iterations
+# ── Per-domain scan (runs in its own process under xargs) ─────────────────────
+scan_domain() {
+    local domain="$1"
+    local TMP_HTTP TMP_TLS
     TMP_HTTP=$(mktemp)
     TMP_TLS=$(mktemp)
+    echo "[SCAN] Analyzing $domain..."
 
     {
         echo "===== $domain ====="
@@ -40,6 +120,7 @@ for domain in "${DOMAINS[@]}"; do
 
         # ── IP Resolution ──────────────────────────────────────────────────
         echo "🔍 IP Resolution:"
+        local IPs
         IPs=$(dig +short "$domain" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
         echo "$IPs"
         if [[ -z "$IPs" ]]; then
@@ -51,10 +132,14 @@ for domain in "${DOMAINS[@]}"; do
 
         # ── CNAME Check (subdomain takeover indicator) ─────────────────────
         echo "🔗 CNAME Check:"
+        local cname
         cname=$(dig +short CNAME "$domain")
         if [[ -n "$cname" ]]; then
             echo "   CNAME → $cname"
             echo "ℹ️  Domain uses a CNAME — verify the target is still active (dangling CNAME = takeover risk)."
+            if [[ -z "$IPs" ]]; then
+                echo "🚩 CNAME present but nothing resolves — HIGH takeover candidate. Verify the target service."
+            fi
         else
             echo "ℹ️  No CNAME detected (direct A record)."
         fi
@@ -62,9 +147,9 @@ for domain in "${DOMAINS[@]}"; do
 
         # ── HTTP Redirect Chain ────────────────────────────────────────────
         echo "🌐 HTTP Redirect Chain (Port 80):"
-        curl -IL --max-redirs 5 --connect-timeout 5 --silent "http://$domain" > "$TMP_HTTP"
+        curl -IL --max-redirs 5 --connect-timeout 5 --max-time 15 --silent "http://$domain" > "$TMP_HTTP" 2>/dev/null
         cat "$TMP_HTTP"
-        if grep -q "Location:" "$TMP_HTTP"; then
+        if grep -qi "^Location:" "$TMP_HTTP"; then
             echo "🔁 HTTP redirects detected. Check for downgrade-to-HTTP risk if HSTS is not enforced."
         else
             echo "ℹ️  No HTTP redirect detected."
@@ -73,16 +158,30 @@ for domain in "${DOMAINS[@]}"; do
 
         # ── TLS Certificate ────────────────────────────────────────────────
         echo "🔐 HTTPS Certificate Info:"
-        openssl_output=$(timeout 5 openssl s_client -connect "$domain:443" \
-            -servername "$domain" </dev/null 2>/dev/null)
-        if [[ $? -ne 0 || -z "$openssl_output" ]]; then
+        local openssl_output rc
+        if [[ -n "$TIMEOUT_CMD" ]]; then
+            openssl_output=$("$TIMEOUT_CMD" 8 openssl s_client -connect "$domain:443" \
+                -servername "$domain" </dev/null 2>/dev/null)
+        else
+            openssl_output=$(openssl s_client -connect "$domain:443" \
+                -servername "$domain" </dev/null 2>/dev/null)
+        fi
+        rc=$?
+        if [[ $rc -ne 0 || -z "$openssl_output" ]]; then
             echo "❌ Could not connect via HTTPS (port 443). TLS handshake failed or timed out."
         else
             if echo "$openssl_output" | openssl x509 -noout -issuer -subject -dates 2>/dev/null; then
                 echo "✅ Valid TLS certificate detected."
-                # Show negotiated protocol version if available
-                proto=$(echo "$openssl_output" | grep -i "Protocol  :" | awk '{print $NF}')
+                local proto
+                proto=$(echo "$openssl_output" | grep -iE "Protocol *:" | head -1 | awk '{print $NF}')
                 [[ -n "$proto" ]] && echo "   Negotiated Protocol: $proto"
+                local not_after
+                not_after=$(echo "$openssl_output" | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+                if [[ -n "$not_after" ]] && ! echo "$openssl_output" | openssl x509 -noout -checkend 0 >/dev/null 2>&1; then
+                    echo "🚩 Certificate EXPIRED on $not_after."
+                elif ! echo "$openssl_output" | openssl x509 -noout -checkend 2592000 >/dev/null 2>&1; then
+                    echo "⚠️  Certificate expires within 30 days ($not_after)."
+                fi
             else
                 echo "⚠️  TLS connection established but certificate could not be parsed."
             fi
@@ -91,8 +190,7 @@ for domain in "${DOMAINS[@]}"; do
 
         # ── Security Headers ───────────────────────────────────────────────
         echo "📋 Security Headers (HTTPS, following redirects):"
-        # -L follows redirects so headers are checked on the final destination
-        curl -sIL --max-redirs 5 --connect-timeout 5 "https://$domain" > "$TMP_TLS"
+        curl -sIL --max-redirs 5 --connect-timeout 5 --max-time 15 "https://$domain" > "$TMP_TLS" 2>/dev/null
         grep -Ei 'server:|x-powered-by|content-security-policy|x-frame-options|x-xss-protection|strict-transport-security|permissions-policy|referrer-policy' "$TMP_TLS" || true
         echo
 
@@ -101,29 +199,29 @@ for domain in "${DOMAINS[@]}"; do
         else
             echo "⚠️  X-Frame-Options missing."
         fi
-
         if grep -qi 'content-security-policy' "$TMP_TLS"; then
             echo "✅ Content-Security-Policy is set (helps prevent XSS)."
         else
             echo "⚠️  No Content-Security-Policy header."
         fi
-
         if grep -qi 'strict-transport-security' "$TMP_TLS"; then
             echo "✅ HSTS is enabled (protects against downgrade attacks)."
         else
             echo "⚠️  HSTS not detected."
         fi
-
         if grep -qi 'permissions-policy' "$TMP_TLS"; then
             echo "✅ Permissions-Policy header is present."
         else
             echo "⚠️  Permissions-Policy header missing."
         fi
+        if grep -qiE '^(server|x-powered-by):.*[0-9]+\.[0-9]+' "$TMP_TLS"; then
+            echo "⚠️  Server/framework version disclosed in headers."
+        fi
         echo
 
         # ── DNS Email Security ─────────────────────────────────────────────
         echo "📧 Email Security (DNS Records):"
-
+        local spf dmarc
         spf=$(dig +short TXT "$domain" | grep -i 'v=spf1' | tr -d '"')
         if [[ -n "$spf" ]]; then
             echo "✅ SPF record found:"
@@ -146,13 +244,13 @@ for domain in "${DOMAINS[@]}"; do
         else
             echo "⚠️  No DMARC record — domain is unprotected against email spoofing."
         fi
-
         echo "ℹ️  DKIM check requires knowing the selector; run:"
         echo "   dig +short TXT <selector>._domainkey.$domain"
         echo
 
         # ── MX Records ────────────────────────────────────────────────────
         echo "📬 MX Records (Mail Servers):"
+        local mx
         mx=$(dig +short MX "$domain")
         if [[ -z "$mx" ]]; then
             echo "⚠️  No MX records found. Domain may not be configured for email."
@@ -164,6 +262,7 @@ for domain in "${DOMAINS[@]}"; do
 
         # ── CAA Records ───────────────────────────────────────────────────
         echo "🏷️  CAA Records (Certificate Authority Authorization):"
+        local caa
         caa=$(dig +short CAA "$domain")
         if [[ -n "$caa" ]]; then
             echo "$caa"
@@ -180,15 +279,33 @@ for domain in "${DOMAINS[@]}"; do
 
     } > "$OUTPUT_DIR/$domain.txt"
 
-    # Clean up per-domain temp files immediately after each scan
     rm -f "$TMP_HTTP" "$TMP_TLS"
-done
+}
 
-# Only remove domains.txt if it was actually used as the input source
-if [[ "$USED_FILE" == true ]]; then
-    echo "[INFO] Cleaning up domains.txt..."
-    rm -f domains.txt
-    echo "[INFO] Cleanup complete."
-fi
+export -f scan_domain
+export OUTPUT_DIR TIMEOUT_CMD
 
-echo "[✓] Scans complete. Results saved in '$OUTPUT_DIR/'"
+echo "[INFO] Scanning ${#DOMAINS[@]} domain(s) with $JOBS parallel job(s)..."
+printf '%s\n' "${DOMAINS[@]}" | xargs -P "$JOBS" -I{} bash -c 'scan_domain "$1"' _ {}
+
+# ── Summary of findings across all reports ────────────────────────────────────
+SUMMARY="$OUTPUT_DIR/_summary.txt"
+{
+    echo "asaudit summary — $(date)"
+    echo "Domains scanned: ${#DOMAINS[@]}"
+    echo
+    echo "Takeover candidates (CNAME, nothing resolves):"
+    grep -l "HIGH takeover candidate" "$OUTPUT_DIR"/*.txt 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.txt$//' | sed 's/^/  /'
+    echo
+    echo "Expired certificates:"
+    grep -l "Certificate EXPIRED" "$OUTPUT_DIR"/*.txt 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.txt$//' | sed 's/^/  /'
+    echo
+    echo "No HTTPS:"
+    grep -l "Could not connect via HTTPS" "$OUTPUT_DIR"/*.txt 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.txt$//' | sed 's/^/  /'
+    echo
+    echo "No HSTS:"
+    grep -l "HSTS not detected" "$OUTPUT_DIR"/*.txt 2>/dev/null | wc -l | sed 's/^ *//; s/^/  count: /'
+} > "$SUMMARY"
+
+echo "[✓] Scans complete. Results in '$OUTPUT_DIR/' (overview: $SUMMARY)"
+# Note: domains.txt is intentionally NOT deleted. subscan overwrites it each run.
