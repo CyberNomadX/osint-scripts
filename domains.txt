@@ -1,0 +1,10 @@
+mail.seasidek12.org
+pre.seasidek12.org
+remote.seasidek12.org
+shs.seasidek12.org
+sms.seasidek12.org
+ssdphone1.seasidek12.org
+ssdphone2.seasidek12.org
+www.mail.seasidek12.org
+www.remote.seasidek12.org
+www.seasidek12.org
