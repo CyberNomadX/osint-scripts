@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# subscan - Subdomain enumeration using subfinder and amass
+# subscan - Subdomain enumeration using subfinder and amass (v4 and v5 compatible)
 # Author: CyberNomadX
 # Usage: subscan [options] <domain>
 
-# Colors
-RED=$(tput setaf 1)
-GREEN=$(tput setaf 2)
-YELLOW=$(tput setaf 3)
-NC=$(tput sgr0)
+# Colors (fall back to plain text when not on a terminal)
+if [[ -t 1 ]] && command -v tput &>/dev/null; then
+    RED=$(tput setaf 1); GREEN=$(tput setaf 2); YELLOW=$(tput setaf 3); NC=$(tput sgr0)
+else
+    RED=""; GREEN=""; YELLOW=""; NC=""
+fi
 
 usage() {
     echo "Subdomain Enumeration Script"
@@ -16,25 +17,38 @@ usage() {
     echo "Example: $0 example.com"
     echo ""
     echo "Options:"
-    echo "  -h, --help    Show this help message"
-    echo "  -f, --filter  Filter for interesting results (WIP)"
+    echo "  -h, --help          Show this help message"
+    echo "  -f, --filter        Also write a list of 'interesting' names (dev, admin, vpn, etc.)"
+    echo "  -t, --timeout MIN   Max minutes to let each tool run (default: 10)"
+    echo "  -n, --no-domains    Do not copy results to domains.txt"
     exit 0
 }
 
 filter=false
+tool_timeout=10
+write_domains=true
 
-# Parse flags FIRST — domain is positional, not $1 before flags are consumed
+# Parse flags first; the domain is the first non-flag argument
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -h|--help)  usage ;;
-        -f|--filter) filter=true; shift ;;
-        --) shift; break ;;
-        -*) echo "${RED}❌ Unknown option: $1${NC}"; exit 1 ;;
-        *)  break ;;  # First non-flag argument is the domain
+        -h|--help)       usage ;;
+        -f|--filter)     filter=true; shift ;;
+        -t|--timeout)    tool_timeout="${2:-}"; shift 2 ;;
+        -n|--no-domains) write_domains=false; shift ;;
+        --)              shift; break ;;
+        -*)              echo "${RED}❌ Unknown option: $1${NC}"; exit 1 ;;
+        *)               break ;;
     esac
 done
 
+if [[ ! "$tool_timeout" =~ ^[0-9]+$ ]]; then
+    echo "${RED}❌ Error: --timeout needs a whole number of minutes.${NC}"
+    exit 1
+fi
+
 domain="${1:-}"
+domain="${domain,,}"   # lowercase (bash 4+); harmless fallback below
+[[ -z "$domain" && -n "${1:-}" ]] && domain=$(echo "$1" | tr '[:upper:]' '[:lower:]')
 
 if [[ -z "$domain" ]]; then
     echo "${RED}❌ Error: No domain provided.${NC}"
@@ -42,7 +56,7 @@ if [[ -z "$domain" ]]; then
     exit 1
 fi
 
-if [[ ! "$domain" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+if [[ ! "$domain" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
     echo "${RED}❌ Error: Invalid domain format.${NC}"
     exit 1
 fi
@@ -51,7 +65,24 @@ output_file="subdomains_${domain}.txt"
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
 
-# Check dependencies
+# Pick a timeout command (GNU timeout, or gtimeout on macOS via coreutils)
+if command -v timeout &>/dev/null; then
+    TIMEOUT_CMD="timeout"
+elif command -v gtimeout &>/dev/null; then
+    TIMEOUT_CMD="gtimeout"
+else
+    TIMEOUT_CMD=""
+    echo "${YELLOW}⚠️  No timeout/gtimeout found; tools will run without a time limit.${NC}"
+fi
+
+run_limited() {
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        "$TIMEOUT_CMD" "${tool_timeout}m" "$@"
+    else
+        "$@"
+    fi
+}
+
 check_dep() {
     if command -v "$1" &>/dev/null; then
         echo "${GREEN}✅ $1 is installed.${NC}"
@@ -65,34 +96,90 @@ check_dep() {
 check_dep subfinder
 check_dep amass
 
-# Run both tools in parallel (addresses the TODO)
-echo "${YELLOW}===>${NC} Running Subfinder and Amass in parallel on ${domain}..."
+echo "${YELLOW}===>${NC} amass version: $(amass -version 2>&1 | head -1)"
+
+# ── Run both tools in parallel ────────────────────────────────────────────────
+echo "${YELLOW}===>${NC} Running Subfinder and Amass in parallel on ${domain} (limit: ${tool_timeout}m each)..."
 echo "⏳ Patience... (amass may take a while)"
 
-subfinder -d "$domain" -o "${tmp_dir}/subfinder_results.txt" 2>/dev/null &
+# Subfinder: -silent prints only hostnames
+run_limited subfinder -d "$domain" -silent \
+    -o "${tmp_dir}/subfinder_results.txt" \
+    >"${tmp_dir}/subfinder.log" 2>&1 &
 PID_SUBFINDER=$!
 
-amass enum -passive -d "$domain" -o "${tmp_dir}/amass_results.txt" 2>/dev/null &
+# Amass v5 stores results in its asset database and does NOT fill the -o text file,
+# so run enum on its own and read the names back with 'amass subs' afterwards.
+run_limited amass enum -d "$domain" \
+    >"${tmp_dir}/amass.log" 2>&1 &
 PID_AMASS=$!
 
-wait $PID_SUBFINDER; SUBFINDER_EXIT=$?
-wait $PID_AMASS;    AMASS_EXIT=$?
+wait "$PID_SUBFINDER"; SUBFINDER_EXIT=$?
+wait "$PID_AMASS";     AMASS_EXIT=$?
 
-[[ $SUBFINDER_EXIT -ne 0 ]] && echo "${YELLOW}⚠️  Subfinder finished with errors. Results may be incomplete.${NC}"
-[[ $AMASS_EXIT    -ne 0 ]] && echo "${YELLOW}⚠️  Amass finished with errors. Results may be incomplete.${NC}"
+# Exit 124 means the timeout fired; partial results are still usable
+if [[ $SUBFINDER_EXIT -eq 124 ]]; then
+    echo "${YELLOW}⚠️  Subfinder hit the ${tool_timeout}m limit. Results may be incomplete.${NC}"
+elif [[ $SUBFINDER_EXIT -ne 0 ]]; then
+    echo "${YELLOW}⚠️  Subfinder exited with code ${SUBFINDER_EXIT}:${NC}"
+    tail -5 "${tmp_dir}/subfinder.log"
+fi
 
-# Merge and deduplicate — sort -u handles this correctly
+if [[ $AMASS_EXIT -eq 124 ]]; then
+    echo "${YELLOW}⚠️  Amass hit the ${tool_timeout}m limit. Results may be incomplete.${NC}"
+elif [[ $AMASS_EXIT -ne 0 ]]; then
+    echo "${YELLOW}⚠️  Amass exited with code ${AMASS_EXIT}:${NC}"
+    tail -5 "${tmp_dir}/amass.log"
+fi
+
+# ── Pull amass names from its database ────────────────────────────────────────
+echo "${YELLOW}===>${NC} Reading amass results from its database..."
+if ! amass subs -names -d "$domain" >"${tmp_dir}/amass_results.txt" 2>>"${tmp_dir}/amass.log"; then
+    echo "${YELLOW}⚠️  'amass subs' failed (older amass without it? try: amass enum -o file):${NC}"
+    tail -3 "${tmp_dir}/amass.log"
+    # Fallback for v4: the -o text file
+    if [[ ! -s "${tmp_dir}/amass_results.txt" ]]; then
+        run_limited amass enum -d "$domain" -o "${tmp_dir}/amass_results.txt" >/dev/null 2>&1
+    fi
+fi
+
+# ── Merge, scope-filter, deduplicate ──────────────────────────────────────────
+# The grep -o keeps only hostnames inside the target domain, so amass's
+# "(FQDN) --> a_record --> ..." lines, IPs, and out-of-scope names never reach asaudit.
 echo "${YELLOW}===>${NC} Merging and deduplicating results..."
+escaped="${domain//./\\.}"
 cat "${tmp_dir}/subfinder_results.txt" "${tmp_dir}/amass_results.txt" 2>/dev/null \
     | tr '[:upper:]' '[:lower:]' \
+    | grep -oE "([a-z0-9_-]+\.)*${escaped}" \
+    | sed 's/^\*\.//' \
     | sort -u \
     > "$output_file"
 
-COUNT=$(wc -l < "$output_file")
-echo "${GREEN}✅ Enumeration complete.${NC} Found ${COUNT} unique subdomains. Results saved to ${output_file}"
+COUNT=$(wc -l < "$output_file" | tr -d ' ')
+SF_COUNT=$(grep -cE '.' "${tmp_dir}/subfinder_results.txt" 2>/dev/null || echo 0)
+AM_COUNT=$(grep -cE '.' "${tmp_dir}/amass_results.txt" 2>/dev/null || echo 0)
 
-# Copy to domains.txt so asaudit can pick them up directly
-cp "$output_file" domains.txt
-echo "${YELLOW}===>${NC} Copied results to domains.txt for use with asaudit."
+if [[ "$COUNT" -eq 0 ]]; then
+    echo "${RED}❌ No subdomains found.${NC} (subfinder: ${SF_COUNT} raw lines, amass: ${AM_COUNT} raw lines)"
+    echo "   Check API keys / network. Logs:"
+    tail -3 "${tmp_dir}/subfinder.log" "${tmp_dir}/amass.log" 2>/dev/null
+    exit 1
+fi
 
-echo "${YELLOW}===>${NC} Exiting..."
+echo "${GREEN}✅ Enumeration complete.${NC} ${COUNT} unique names (subfinder raw: ${SF_COUNT}, amass raw: ${AM_COUNT}). Saved to ${output_file}"
+
+# ── Optional: interesting names ───────────────────────────────────────────────
+if [[ "$filter" == true ]]; then
+    interesting_file="interesting_${domain}.txt"
+    grep -Ei '(^|[.-])(dev|test|stag(e|ing)|uat|qa|admin|vpn|remote|rdp|ssh|ftp|sftp|mail|owa|webmail|portal|login|sso|auth|api|git|jenkins|jira|internal|intranet|backup|old|beta|demo|db|sql|cpanel|dashboard)([.-]|[0-9]|$)' \
+        "$output_file" > "$interesting_file"
+    echo "${YELLOW}===>${NC} $(wc -l < "$interesting_file" | tr -d ' ') interesting names saved to ${interesting_file}"
+fi
+
+# ── Hand off to asaudit ───────────────────────────────────────────────────────
+if [[ "$write_domains" == true ]]; then
+    cp "$output_file" domains.txt
+    echo "${YELLOW}===>${NC} Copied results to domains.txt for use with asaudit."
+fi
+
+echo "${YELLOW}===>${NC} Done."
